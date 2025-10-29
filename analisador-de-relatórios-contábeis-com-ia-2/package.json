@@ -1,9 +1,0 @@
-{
-  "name": "analisador-contabil-ia",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Dependencies for the Vercel serverless function.",
-  "dependencies": {
-    "@google/genai": "^1.27.0"
-  }
-}
