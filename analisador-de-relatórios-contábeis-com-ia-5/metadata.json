@@ -1,5 +1,0 @@
-{
-  "name": "Analisador de Relatórios Contábeis com IA",
-  "description": "Uma aplicação web para analisar relatórios contábeis como balanços, DREs e balancetes usando IA para identificar erros, sugerir melhorias e revisar a ortografia. Suporta arquivos .pdf e .xlsx.",
-  "requestFramePermissions": []
-}
