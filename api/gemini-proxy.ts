@@ -1,13 +1,9 @@
 // /api/gemini-proxy.ts
-
-// Este arquivo DEVE estar dentro de uma pasta 'api' na raiz do seu projeto.
-// A Vercel irá automaticamente transformar este arquivo em uma função serverless.
+// Serverless Function (Node) para projetos estáticos na Vercel.
 
 import { GoogleGenAI, Type } from "@google/genai";
 
-// --- Tipos de Dados (para isolar a função serverless) ---
-// Estes tipos são uma cópia de 'types.ts' para garantir que a função
-// não dependa de arquivos externos, o que pode causar problemas no deploy.
+// ------------------------ Tipos básicos ------------------------
 interface AppSettings {
   model: 'gemini-2.5-pro' | 'gemini-2.5-flash';
 }
@@ -33,10 +29,10 @@ interface AnalysisHistoryItem {
   employeeName?: string;
   companyName?: string;
 }
-// --- Fim dos Tipos de Dados ---
+// ---------------------------------------------------------------
 
 
-// --- Schemas e Prompts ---
+// ---------------------- Schemas & Prompts ----------------------
 const analysisPrompt = `
 Você é um contador especialista e analista financeiro. Sua tarefa é analisar o seguinte relatório contábil (pode ser um balanço, balancete ou DRE) e fornecer uma análise detalhada. O conteúdo do relatório será fornecido a seguir.
 
@@ -54,26 +50,79 @@ Aqui estão as tarefas que você deve executar:
 const analysisSchema = {
   type: Type.OBJECT,
   properties: {
-    summary: { type: Type.STRING, description: "Resumo geral da análise." },
-    balanceErrors: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { accountName: { type: Type.STRING }, issue: { type: Type.STRING }, suggestion: { type: Type.STRING } }, required: ["accountName", "issue", "suggestion"] } },
-    calculationErrors: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { groupName: { type: Type.STRING }, expectedTotal: { type: Type.NUMBER }, actualTotal: { type: Type.NUMBER }, suggestion: { type: Type.STRING } }, required: ["groupName", "expectedTotal", "actualTotal", "suggestion"] } },
-    accountSuggestions: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { suggestion: { type: Type.STRING }, reasoning: { type: Type.STRING } }, required: ["suggestion", "reasoning"] } },
-    spellingCorrections: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { originalText: { type: Type.STRING }, correctedText: { type: Type.STRING } }, required: ["originalText", "correctedText"] } },
-    customAnalysisResults: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { request: { type: Type.STRING }, response: { type: Type.STRING } }, required: ["request", "response"] } },
+    summary: { type: Type.STRING },
+    balanceErrors: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          accountName: { type: Type.STRING },
+          issue: { type: Type.STRING },
+          suggestion: { type: Type.STRING },
+        },
+        required: ["accountName", "issue", "suggestion"],
+      },
+    },
+    calculationErrors: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          groupName: { type: Type.STRING },
+          expectedTotal: { type: Type.NUMBER },
+          actualTotal: { type: Type.NUMBER },
+          suggestion: { type: Type.STRING },
+        },
+        required: ["groupName", "expectedTotal", "actualTotal", "suggestion"],
+      },
+    },
+    accountSuggestions: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          suggestion: { type: Type.STRING },
+          reasoning: { type: Type.STRING },
+        },
+        required: ["suggestion", "reasoning"],
+      },
+    },
+    spellingCorrections: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          originalText: { type: Type.STRING },
+          correctedText: { type: Type.STRING },
+        },
+        required: ["originalText", "correctedText"],
+      },
+    },
+    customAnalysisResults: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          request: { type: Type.STRING },
+          response: { type: Type.STRING },
+        },
+        required: ["request", "response"],
+      },
+    },
   },
   required: ["summary", "balanceErrors", "calculationErrors", "accountSuggestions", "spellingCorrections", "customAnalysisResults"],
 };
 
 const comparisonPrompt = `
-    Você é um auditor contábil sênior. Sua tarefa é comparar os resultados de análises de relatórios contábeis fornecidos abaixo em formato JSON.
-    **Objetivo**: Realize uma análise comparativa profunda, focando em:
-    1.  **Diferenças Chave (keyDifferences)**: Aponte as divergências mais significativas.
-    2.  **Semelhanças Chave (keySimilarities)**: Identifique problemas recorrentes ou pontos positivos consistentes.
-    3.  **Análise de Tendência (trendAnalysis)**: Se os relatórios parecem ser da mesma empresa em datas diferentes, analise a evolução.
-    4.  **Resumo (summary)**: Forneça um parágrafo conciso resumindo a comparação.
-    **Importante**: Sua resposta deve ser exclusivamente no formato JSON especificado no schema.
-    Abaixo estão os dados para comparação:
-    `;
+Você é um auditor contábil sênior. Sua tarefa é comparar os resultados de análises de relatórios contábeis fornecidos abaixo em formato JSON.
+**Objetivo**: Realize uma análise comparativa profunda, focando em:
+1. **Diferenças Chave (keyDifferences)**: Aponte as divergências mais significativas.
+2. **Semelhanças Chave (keySimilarities)**: Identifique problemas recorrentes ou pontos positivos consistentes.
+3. **Análise de Tendência (trendAnalysis)**: Se os relatórios parecem ser da mesma empresa em datas diferentes, analise a evolução.
+4. **Resumo (summary)**: Forneça um parágrafo conciso resumindo a comparação.
+**Importante**: Sua resposta deve ser exclusivamente no formato JSON especificado no schema.
+Abaixo estão os dados para comparação:
+`;
 
 const comparisonSchema = {
   type: Type.OBJECT,
@@ -82,22 +131,17 @@ const comparisonSchema = {
     keyDifferences: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { aspect: { type: Type.STRING }, details: { type: Type.STRING } } } },
     keySimilarities: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { aspect: { type: Type.STRING }, details: { type: Type.STRING } } } },
     trendAnalysis: { type: Type.STRING },
-    comparedItems: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { fileName: { type: Type.STRING }, analysisDate: { type: Type.STRING }, employeeName: { type: Type.STRING }, companyName: { type: Type.STRING } } } }
+    comparedItems: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { fileName: { type: Type.STRING }, analysisDate: { type: Type.STRING }, employeeName: { type: Type.STRING }, companyName: { type: Type.STRING } } } },
   },
   required: ["summary", "keyDifferences", "keySimilarities", "comparedItems"],
 };
-// --- Fim dos Schemas e Prompts ---
+// --------------------------------------------------------------
 
 
-// ===================== FUNÇÕES AUXILIARES =====================
-/**
- * Obtém texto da resposta do SDK, tratando tanto getter (string) quanto ausência.
- * NÃO chama .text() como função para evitar TS6234/TS18048.
- */
+// ---------------------- Utilitários simples -------------------
 function getResponseText(resp: any): string {
   const t = (resp as any)?.text;
   if (typeof t === 'string') return t;
-  // fallback simples: tenta extrair de candidates/parts se existir
   const parts = (resp as any)?.candidates?.flatMap((c: any) => c?.content?.parts ?? []) ?? [];
   const texts = parts.map((p: any) => p?.text).filter((x: any) => typeof x === 'string');
   return texts.join('\n');
@@ -106,10 +150,10 @@ function getResponseText(resp: any): string {
 function stripJsonFences(s: string): string {
   return s.trim().replace(/^```json\s*|\s*```$/g, '');
 }
-// =============================================================
+// --------------------------------------------------------------
 
 
-// ====================== HANDLERS DE NEGÓCIO ===================
+// ---------------------- Handlers de negócio -------------------
 async function handleAnalyze(
   ai: GoogleGenAI,
   body: { reportData: ParseResult; settings: AppSettings; finalPrompt?: string }
@@ -182,26 +226,24 @@ async function handleCompare(
     throw new Error("Falha ao processar a resposta de comparação (JSON inválido).");
   }
 }
-// ==================== FIM HANDLERS DE NEGÓCIO =================
+// --------------------------------------------------------------
 
 
-// =================== Handler da função serverless ==============
-export default async function handler(request: Request) {
-  if (request.method !== 'POST') {
-    return new Response(JSON.stringify({ message: 'Apenas requisições POST são permitidas' }), {
-      status: 405,
-      headers: { 'Content-Type': 'application/json' },
-    });
+// --------------- Serverless Function (Node runtime) -----------
+export default async function handler(req: any, res: any) {
+  if (req.method !== 'POST') {
+    res.status(405).json({ message: 'Apenas requisições POST são permitidas' });
+    return;
   }
 
   try {
-    const body = await request.json();
-    const { type } = body;
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    const { type } = body || {};
 
-    // Acessa a API Key de forma segura através das variáveis de ambiente da Vercel
     const apiKey = process.env.API_KEY;
     if (!apiKey) {
-      throw new Error("A variável de ambiente API_KEY não está configurada no projeto Vercel.");
+      res.status(500).json({ message: "A variável de ambiente API_KEY não está configurada no projeto Vercel." });
+      return;
     }
     const ai = new GoogleGenAI({ apiKey });
 
@@ -211,21 +253,15 @@ export default async function handler(request: Request) {
     } else if (type === 'compare') {
       result = await handleCompare(ai, body);
     } else {
-      throw new Error("Tipo de requisição inválido.");
+      res.status(400).json({ message: "Tipo de requisição inválido." });
+      return;
     }
 
-    return new Response(JSON.stringify(result), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-  } catch (error) {
+    res.status(200).json(result);
+  } catch (error: any) {
     console.error("Erro na função proxy da API:", error);
-    const message = error instanceof Error ? error.message : 'Ocorreu um erro desconhecido no servidor.';
-    return new Response(JSON.stringify({ message }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    const message = error?.message ?? 'Ocorreu um erro desconhecido no servidor.';
+    res.status(500).json({ message });
   }
 }
-// =================== Fim do handler ===========================
+// --------------------------------------------------------------
