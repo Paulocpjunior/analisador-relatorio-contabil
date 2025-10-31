@@ -161,8 +161,7 @@ async function handleCompare(
   });
 
   // ✅ correção simples para o TS18048
-  const text = (await response.text?.()) ?? '';
-
+  const text = (response as any).text ?? '';
   if (!text.trim()) {
     throw new Error("A resposta da API do Gemini para comparação veio vazia ou foi bloqueada.");
   }
