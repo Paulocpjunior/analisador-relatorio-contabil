@@ -134,11 +134,14 @@ export default async function handler(request: Request) {
     }
 }
 
-async function handleCompare(
-  ai: GoogleGenAI,
-  body: { itemsToCompare: AnalysisHistoryItem[]; settings: AppSettings }
-) {
-  const { itemsToCompare, settings } = body;
+// 👇 cole isso antes da handleCompare
+async function handleAnalyze(ai: any, body: any) {
+  return {};
+}
+
+async function handleCompare(ai: GoogleGenAI, body: { itemsToCompare: AnalysisHistoryItem[], settings: AppSettings }) {
+  ...
+}
 
   const reportsJson = itemsToCompare.map(item => ({
     fileName: item.fileName,
