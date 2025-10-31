@@ -134,85 +134,46 @@ export default async function handler(request: Request) {
     }
 }
 
-async function handleAnalyze(ai: GoogleGenAI, body: { reportData: ParseResult, customFields: string[], settings: AppSettings }) {
-    const { reportData, customFields, settings } = body;
-    let contents: any;
+async function handleCompare(
+  ai: GoogleGenAI,
+  body: { itemsToCompare: AnalysisHistoryItem[]; settings: AppSettings }
+) {
+  const { itemsToCompare, settings } = body;
 
-    let finalPrompt = analysisPrompt;
-    if (customFields && customFields.length > 0) {
-        const customRequests = customFields.map((field, index) => `  ${index + 1}. ${field}`).join('\n');
-        finalPrompt += `
-6.  **Análises Customizadas (customAnalysisResults)**: Responda às seguintes solicitações específicas:
-${customRequests}`;
-    } else {
-        finalPrompt += `
-6.  **Análises Customizadas (customAnalysisResults)**: O usuário não forneceu nenhuma solicitação customizada. Retorne um array vazio.`;
-    }
+  const reportsJson = itemsToCompare.map(item => ({
+    fileName: item.fileName,
+    analysisDate: item.analysisDate,
+    employeeName: item.employeeName,
+    companyName: item.companyName,
+    analysisResult: item.result,
+  }));
 
-    if (reportData.type === 'text') {
-        contents = `${finalPrompt}\n\n--- INÍCIO DO RELATÓRIO ---\n${reportData.content}\n--- FIM DO RELATÓRIO ---`;
-    } else {
-        const textPart = { text: `${finalPrompt}\n\n--- RELATÓRIO EM IMAGENS ---` };
-        const imageParts = reportData.content.map((img) => ({
-            inlineData: { mimeType: img.mimeType, data: img.data },
-        }));
-        contents = { parts: [textPart, ...imageParts] };
-    }
+  const contents = `${comparisonPrompt}\n\n${JSON.stringify(reportsJson, null, 2)}`;
 
-    const response: GenerateContentResponse = await ai.models.generateContent({
-        model: settings.model,
-        contents,
-        config: { responseMimeType: "application/json", responseSchema: analysisSchema, temperature: 0.2 },
-    });
+  const response: GenerateContentResponse = await ai.models.generateContent({
+    model: settings.model,
+    contents,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: comparisonSchema, // mantenha ou remova conforme seu código
+      temperature: 0.2,
+    },
+  });
 
-    const text = response.text;
-    if (text) {
-        const cleanedText = text.trim().replace(/^```json\s*|```\s*$/g, '');
-        if (cleanedText) {
-            try {
-                return JSON.parse(cleanedText);
-            } catch (e) {
-                console.error("A API Gemini retornou uma resposta não-JSON:", cleanedText);
-                throw new Error("Falha ao processar a resposta da API. O formato JSON retornado era inválido.");
-            }
-        }
-    }
-    
-    throw new Error("A resposta da API do Gemini para análise estava vazia ou foi bloqueada por filtros de segurança.");
-}
+  // ✅ correção simples para o TS18048
+  const text = (await response.text?.()) ?? '';
 
+  if (!text.trim()) {
+    throw new Error("A resposta da API do Gemini para comparação veio vazia ou foi bloqueada.");
+  }
 
-async function handleCompare(ai: GoogleGenAI, body: { itemsToCompare: AnalysisHistoryItem[], settings: AppSettings }) {
-    const { itemsToCompare, settings } = body;
-    
-    const reportsJson = itemsToCompare.map(item => ({
-        fileName: item.fileName,
-        analysisDate: item.analysisDate,
-        employeeName: item.employeeName,
-        companyName: item.companyName,
-        analysisResult: item.result,
-    }));
-    
-    const contents = `${comparisonPrompt}\n\n${JSON.stringify(reportsJson, null, 2)}`;
+  const cleanedText = text.trim().replace(/^```json\s*|\s*```$/g, '');
 
-    const response: GenerateContentResponse = await ai.models.generateContent({
-        model: settings.model,
-        contents,
-        config: { responseMimeType: "application/json", responseSchema: comparisonSchema, temperature: 0.3 },
-    });
-    
-    const text = response.text;
-    if (text) {
-        const cleanedText = text.trim().replace(/^```json\s*|```\s*$/g, '');
-        if (cleanedText) {
-            try {
-                return JSON.parse(cleanedText);
-            } catch (e) {
-                console.error("A API Gemini retornou uma resposta não-JSON:", cleanedText);
-                throw new Error("Falha ao processar a resposta da API. O formato JSON retornado era inválido.");
-            }
-        }
-    }
-    
-    throw new Error("A resposta da API do Gemini para comparação estava vazia ou foi bloqueada por filtros de segurança.");
+  try {
+    const parsed = JSON.parse(cleanedText);
+    return parsed;
+  } catch {
+    console.error("Comparação retornou não-JSON:", cleanedText);
+    throw new Error("Falha ao processar a resposta de comparação (JSON inválido).");
+  }
 }
