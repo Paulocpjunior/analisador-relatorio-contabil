@@ -133,7 +133,10 @@ export default async function handler(request: Request) {
         });
     }
 }
-
+// --- STUB mínimo para resolver "Cannot find name 'handleAnalyze'" ---
+async function handleAnalyze(ai: any, body: any) {
+  return {}; // ajuste depois com sua lógica real
+}
 // 👇 cole isso antes da handleCompare
 async function handleAnalyze(ai: any, body: any) {
   return {};
