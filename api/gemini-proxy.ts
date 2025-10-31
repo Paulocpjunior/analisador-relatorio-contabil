@@ -3,7 +3,7 @@
 // Este arquivo DEVE estar dentro de uma pasta 'api' na raiz do seu projeto.
 // A Vercel irá automaticamente transformar este arquivo em uma função serverless.
 
-import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 
 // --- Tipos de Dados (para isolar a função serverless) ---
 // Estes tipos são uma cópia de 'types.ts' para garantir que a função
@@ -12,7 +12,7 @@ interface AppSettings {
   model: 'gemini-2.5-pro' | 'gemini-2.5-flash';
 }
 
-type ParseResult = 
+type ParseResult =
   | { type: 'text'; content: string }
   | { type: 'images'; content: { mimeType: string; data: string }[] };
 
@@ -86,67 +86,74 @@ const comparisonSchema = {
   },
   required: ["summary", "keyDifferences", "keySimilarities", "comparedItems"],
 };
-
 // --- Fim dos Schemas e Prompts ---
 
 
-// Handler da função serverless
-export default async function handler(request: Request) {
-    if (request.method !== 'POST') {
-        return new Response(JSON.stringify({ message: 'Apenas requisições POST são permitidas' }), {
-            status: 405,
-            headers: { 'Content-Type': 'application/json' },
-        });
-    }
-
-    try {
-        const body = await request.json();
-        const { type } = body;
-
-        // Acessa a API Key de forma segura através das variáveis de ambiente da Vercel
-        const apiKey = process.env.API_KEY;
-        if (!apiKey) {
-            throw new Error("A variável de ambiente API_KEY não está configurada no projeto Vercel.");
-        }
-        const ai = new GoogleGenAI({ apiKey });
-
-        let result;
-        if (type === 'analyze') {
-            result = await handleAnalyze(ai, body);
-        } else if (type === 'compare') {
-            result = await handleCompare(ai, body);
-        } else {
-            throw new Error("Tipo de requisição inválido.");
-        }
-
-        return new Response(JSON.stringify(result), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-        });
-
-    } catch (error) {
-        console.error("Erro na função proxy da API:", error);
-        const message = error instanceof Error ? error.message : 'Ocorreu um erro desconhecido no servidor.';
-        return new Response(JSON.stringify({ message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' },
-        });
-    }
-}
-// --- STUB mínimo para resolver "Cannot find name 'handleAnalyze'" ---
-async function handleAnalyze(ai: any, body: any) {
-  return {}; // ajuste depois com sua lógica real
-}
-// 👇 cole isso antes da handleCompare
-async function handleAnalyze(ai: any, body: any) {
-  return {};
+// ===================== FUNÇÕES AUXILIARES =====================
+/**
+ * Obtém texto da resposta do SDK, tratando tanto getter (string) quanto ausência.
+ * NÃO chama .text() como função para evitar TS6234/TS18048.
+ */
+function getResponseText(resp: any): string {
+  const t = (resp as any)?.text;
+  if (typeof t === 'string') return t;
+  // fallback simples: tenta extrair de candidates/parts se existir
+  const parts = (resp as any)?.candidates?.flatMap((c: any) => c?.content?.parts ?? []) ?? [];
+  const texts = parts.map((p: any) => p?.text).filter((x: any) => typeof x === 'string');
+  return texts.join('\n');
 }
 
-async function handleCompare(ai: GoogleGenAI, body: { itemsToCompare: AnalysisHistoryItem[], settings: AppSettings }) {
-  ...
+function stripJsonFences(s: string): string {
+  return s.trim().replace(/^```json\s*|\s*```$/g, '');
+}
+// =============================================================
+
+
+// ====================== HANDLERS DE NEGÓCIO ===================
+async function handleAnalyze(
+  ai: GoogleGenAI,
+  body: { reportData: ParseResult; settings: AppSettings; finalPrompt?: string }
+) {
+  const { reportData, settings, finalPrompt = analysisPrompt } = body;
+
+  let contents: any;
+  if (reportData?.type === 'text') {
+    contents = `${finalPrompt}\n\n--- INÍCIO DO RELATÓRIO ---\n${reportData.content}\n--- FIM DO RELATÓRIO ---`;
+  } else {
+    const textPart = { text: `${finalPrompt}\n\n--- RELATÓRIO EM IMAGENS ---` };
+    const imageParts = (reportData?.content ?? []).map((img) => ({
+      inlineData: { mimeType: img.mimeType, data: img.data },
+    }));
+    contents = { parts: [textPart, ...imageParts] };
+  }
+
+  const response = await ai.models.generateContent({
+    model: settings.model,
+    contents,
+    config: { responseMimeType: "application/json", responseSchema: analysisSchema, temperature: 0.2 },
+  });
+
+  const text = getResponseText(response);
+  const cleaned = stripJsonFences(text);
+  if (!cleaned) {
+    throw new Error("A resposta da API do Gemini para análise estava vazia ou foi bloqueada por filtros de segurança.");
+  }
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    console.error("A API Gemini retornou uma resposta não-JSON:", cleaned);
+    throw new Error("Falha ao processar a resposta da API. O formato JSON retornado era inválido.");
+  }
 }
 
-  const reportsJson = itemsToCompare.map(item => ({
+async function handleCompare(
+  ai: GoogleGenAI,
+  body: { itemsToCompare: AnalysisHistoryItem[]; settings: AppSettings }
+) {
+  const { itemsToCompare = [], settings } = body;
+
+  const reportsJson = itemsToCompare.map((item) => ({
     fileName: item.fileName,
     analysisDate: item.analysisDate,
     employeeName: item.employeeName,
@@ -156,29 +163,69 @@ async function handleCompare(ai: GoogleGenAI, body: { itemsToCompare: AnalysisHi
 
   const contents = `${comparisonPrompt}\n\n${JSON.stringify(reportsJson, null, 2)}`;
 
-  const response: GenerateContentResponse = await ai.models.generateContent({
+  const response = await ai.models.generateContent({
     model: settings.model,
     contents,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: comparisonSchema, // mantenha ou remova conforme seu código
-      temperature: 0.2,
-    },
+    config: { responseMimeType: "application/json", responseSchema: comparisonSchema, temperature: 0.2 },
   });
 
-  // ✅ correção simples para o TS18048
-  const text = (response as any).text ?? '';
-  if (!text.trim()) {
+  const text = getResponseText(response);
+  const cleaned = stripJsonFences(text);
+  if (!cleaned) {
     throw new Error("A resposta da API do Gemini para comparação veio vazia ou foi bloqueada.");
   }
 
-  const cleanedText = text.trim().replace(/^```json\s*|\s*```$/g, '');
-
   try {
-    const parsed = JSON.parse(cleanedText);
-    return parsed;
+    return JSON.parse(cleaned);
   } catch {
-    console.error("Comparação retornou não-JSON:", cleanedText);
+    console.error("Comparação retornou não-JSON:", cleaned);
     throw new Error("Falha ao processar a resposta de comparação (JSON inválido).");
   }
 }
+// ==================== FIM HANDLERS DE NEGÓCIO =================
+
+
+// =================== Handler da função serverless ==============
+export default async function handler(request: Request) {
+  if (request.method !== 'POST') {
+    return new Response(JSON.stringify({ message: 'Apenas requisições POST são permitidas' }), {
+      status: 405,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+
+  try {
+    const body = await request.json();
+    const { type } = body;
+
+    // Acessa a API Key de forma segura através das variáveis de ambiente da Vercel
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      throw new Error("A variável de ambiente API_KEY não está configurada no projeto Vercel.");
+    }
+    const ai = new GoogleGenAI({ apiKey });
+
+    let result: unknown;
+    if (type === 'analyze') {
+      result = await handleAnalyze(ai, body);
+    } else if (type === 'compare') {
+      result = await handleCompare(ai, body);
+    } else {
+      throw new Error("Tipo de requisição inválido.");
+    }
+
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+  } catch (error) {
+    console.error("Erro na função proxy da API:", error);
+    const message = error instanceof Error ? error.message : 'Ocorreu um erro desconhecido no servidor.';
+    return new Response(JSON.stringify({ message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+}
+// =================== Fim do handler ===========================
